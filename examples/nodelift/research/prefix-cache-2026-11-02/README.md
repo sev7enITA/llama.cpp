@@ -2,10 +2,12 @@
 
 On 2 November 2026, a single Mac ran the fixed [plan](PLAN.md) against an already installed Llama 3.1 8B Q4_K_M model and NodeLift's existing native library. The test exercises `Engine::sync` directly, rather than changing the desktop controller, which currently resets its context at the beginning of each request.
 
-| Exact shared prefix | Cold prefill, median | Reused prefill, median | Median paired prefill ratio | Median paired ratio including 16 generated tokens | Identical token and EOS pairs |
+| Base prefix length | Cold prefill, median | Reused prefill, median | Median paired prefill ratio | Median paired ratio including 16 generated tokens | Identical token and EOS pairs |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 256 tokens | 606.2 ms | 52.4 ms | 11.25x | 2.13x | 6/6 |
 | 1024 tokens | 2240.1 ms | 58.6 ms | 38.99x | 5.14x | 6/6 |
+
+Correction after review: the tokenizer inserted a common beginning-of-sequence token at the start of both separately tokenized suffixes. The exact common prefixes in this recorded run were therefore 257 and 1,025 tokens, respectively, rather than 256 and 1,024. The table labels refer to the synthetic base lengths; the retained results and timings are unchanged. The native synchronization may replay the final shared token to restore logits, so common-prefix length is not the same as the number of tokens actually skipped. The runner now records the complete shared length and the supplied model filename instead of hard-coding a model name.
 
 Ratios are medians of the six paired ratios, not ratios of the two marginal medians. Priming the retained context took place outside the measured request and was done for both arms. The cold reset itself was also outside the timed window. The prompt is synthetic and deliberately repeats the exact prefix; it does not establish the frequency of cache hits in real conversations. Timings exclude initial model loading and do not isolate first-token latency. The generated output is a short greedy native draft call, not an application or network benchmark. There was no independent GPU placement attestation, load, energy or thermal measurement, and no statistical confidence interval. Twelve equal token/EOS pairs cannot prove equivalence for other models, backends, batching shapes or inputs.
 
