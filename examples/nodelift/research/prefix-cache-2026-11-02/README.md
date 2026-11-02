@@ -15,6 +15,8 @@ The data supports pursuing an opt-in, session-isolated prefix cache with explici
 
 An independent static review raised a separate tokenizer trust-boundary concern. In [two local tokenization checks](tokenizer-review.json), a literal special-token spelling embedded in user content became an additional special token in the formatted chat sequence for both tested model families. Whether any particular model follows injected instructions was not tested. Do not assume that untrusted text is isolated from chat-template delimiters. Changing special-token parsing globally may also break template formatting, so a model-aware remedy and targeted tests are required. The same checks did not reproduce a duplicated initial BOS for the tested Llama and Qwen chat prompts.
 
+The [bounded review record](REVIEW-2026-11-02.md) distinguishes Gemini's static observations from locally reproduced behavior, rejected assumptions and tests still needed. GLM 5.3 Max returned a capacity message for the review requests; no GLM result was obtained in this session.
+
 Other avenues are model residency and carefully bounded prefetch. Measure cold load separately from warm requests and account for RAM pressure. Parallel draft prefill can contend with target work, while speculative proposals cannot be trusted after their authoritative prefix changes. Measure and cancel stale work. Remote KV offload is a separate idea whose transfer and recovery cost must be measured against local recomputation. See [vLLM automatic prefix caching](https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/) and [LMCache](https://docs.lmcache.ai/) for existing approaches. No production feature is enabled by this experiment.
 
 Reproduce with an existing compatible GGUF and native library:
