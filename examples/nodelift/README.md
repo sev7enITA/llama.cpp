@@ -8,6 +8,10 @@ The wrapper is experimental. It supports greedy-only generation in this interfac
 
 The upstream source was pinned to `ddf48f85c933c1f438212a02eb21e7b001d2d37d`; see `native/llama.lock`. The CMake build requires a C/C++ compiler and CMake 3.22 or newer. The test scripts use Python 3.11 or newer. The compiled library itself has no Python dependency. Do not distribute model weights without their separate licence.
 
+## Input trust boundary
+
+The current tokenizer parses special-token spellings in formatted chat text. Local tests found that untrusted message content containing a literal delimiter can add a special token to the resulting sequence. Model response to such input was not tested. Do not rely on this experimental wrapper to isolate untrusted user or retrieved text from template control tokens. See the [tokenizer check](research/prefix-cache-2026-11-02/tokenizer-review.json) and research report.
+
 ## Build on macOS
 
 From the repository root at the pinned branch:

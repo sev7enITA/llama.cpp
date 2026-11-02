@@ -1,0 +1,56 @@
+{
+  "scope": "Exploratory raw and chat tokenization, one local call per model; no prompt-injection outcome measured",
+  "checks": [
+    {
+      "model": "llama",
+      "raw_start": [
+        128000,
+        9906
+      ],
+      "chat_start": [
+        128000,
+        128006,
+        882,
+        128007,
+        271,
+        9906
+      ],
+      "marker_tokens": [
+        128000,
+        128009
+      ],
+      "marker_counts_clean": [
+        1,
+        1
+      ],
+      "marker_counts_injected": [
+        1,
+        2
+      ]
+    },
+    {
+      "model": "qwen",
+      "raw_start": [
+        9707
+      ],
+      "chat_start": [
+        151644,
+        872,
+        198,
+        9707,
+        151645,
+        198
+      ],
+      "marker_tokens": [
+        151645
+      ],
+      "marker_counts_clean": [
+        1
+      ],
+      "marker_counts_injected": [
+        2
+      ]
+    }
+  ],
+  "interpretation": "Inserting a literal special-token spelling in the user text added the corresponding special token to the tokenized chat sequence. The tested chat prefixes each contained only one BOS when applicable."
+}
