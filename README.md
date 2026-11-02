@@ -1,5 +1,7 @@
 # llama.cpp
 
+> **NodeLift experimental fork:** This branch adds a [research wrapper and reproducible prefix-cache tests](examples/nodelift/README.md). It does not claim a new llama.cpp cache optimization. Upstream llama.cpp is maintained by [ggml-org](https://github.com/ggml-org/llama.cpp).
+
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">

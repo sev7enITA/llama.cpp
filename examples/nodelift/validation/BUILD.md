@@ -1,0 +1,7 @@
+# macOS arm64 build validation
+
+Built on 2 November 2026 with AppleClang 21, CMake 3.22.1, Release configuration, Metal requested, and `NODELIFT_EXPERIMENTAL_DEFERRED_DRAFT=OFF`. The output is a Mach-O arm64 dynamic library compiled from this fork branch with SHA-256 `7e11b6cc52bba26f6fff1db3f7e5400c5edf7d7bc535c76760cb9a2295155332`. The deployment target is macOS 14.0; it was tested on the build machine only, not on macOS 14. The linker applied an ad hoc signature; the library is not Developer ID signed or notarized. OpenMP was unavailable in this build.
+
+The local llama.cpp source snapshot was checked against the pinned GitHub tree: 1,819 relevant blobs under `src`, `include`, `ggml`, `vendor`, `cmake` and root `CMakeLists.txt` matched, with zero missing or mismatched. This verifies the selected source files, not all files in the upstream repository. See [source verification](upstream-source-verify.json).
+
+The real-weight `check-native.py` test completed 31 checks with a Qwen2.5 0.5B Q4_K_M model, the strict serial verifier and GPU layers requested as 999. [Raw correctness record](native-correctness-macos-arm64.json). The model is not included; requested GPU placement is not independently attested. These checks do not establish general numerical equivalence, production readiness or performance on other devices. The cache measurements in the neighboring research folder were performed with an earlier native build and are not a benchmark of this binary.
