@@ -6,6 +6,10 @@ This is a research wrapper and reproducibility bundle from [NodeLift](https://gi
 
 The wrapper is experimental. It supports greedy-only generation in this interface, finite contexts, selected model architectures and opt-in serial verification. Batched and serial numerical results can differ. The deferred draft cache mode is disabled by default. This package does not pool device RAM, offer a production server, or attest acceleration across devices. See the [prefix reuse experiment](research/prefix-cache-2026-11-02/README.md) for its synthetic single-Mac scope, precise timings, methodology and model/license caveats.
 
+The native API accepts context sizes from 256 to 8,192 tokens, 1 to 16 CPU threads, and requested GPU layer counts from 0 to 999. A draft call generates at most 512 tokens; a verification call accepts at most 16 proposal tokens with a remaining budget of 1 to 512. Chat input accepts at most 32 messages. Prefix and output must also fit the context. These are wrapper limits, not guarantees that a particular model or device can handle the maximum.
+
+The published 31-check result covers the opt-in serial verifier. Calls without `strict: true` use the different batched path, which is not certified by that result. Serial results include `verification_mode: serial`; the current batch response does not include that field. Absence of the field must not be interpreted as serial validation.
+
 The upstream source was pinned to `ddf48f85c933c1f438212a02eb21e7b001d2d37d`; see `native/llama.lock`. The CMake build requires a C/C++ compiler and CMake 3.22 or newer. The test scripts use Python 3.11 or newer. The compiled library itself has no Python dependency. Do not distribute model weights without their separate licence.
 
 ## Input trust boundary
@@ -33,6 +37,8 @@ Set GPU layers to 0 to request CPU execution. CUDA, Windows, Linux, iOS and Andr
 ## Build evidence
 
 A macOS arm64 library was compiled and tested with real model weights. The [build report](validation/BUILD.md) records its exact scope, source verification and 31 strict checks.
+
+The 3 November source update adds `core.h` to the CMake target sources so an iOS framework can package its public header. It does not replace the existing macOS prerelease binary or certify an iOS build from this fork. See the [follow-up assessment](https://github.com/sev7enITA/NodeLift/blob/main/research/reviewer-resumption-2026-11-03/REVIEW.md). The existing macOS binary exports upstream and SHA-256 symbols as well as the NodeLift ABI; coexistence with other native runtimes remains unqualified. An actual symbol collision has not been demonstrated.
 
 ## Attribution
 
