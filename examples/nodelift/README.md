@@ -45,3 +45,9 @@ The 3 November source update adds `core.h` to the CMake target sources so an iOS
 ## Attribution
 
 NodeLift code is copyright Fabrizio Degni under [MIT](LICENSE.nodelift). llama.cpp is copyright its contributors under the repository's [MIT licence](../../LICENSE). See [third-party notices](native/licenses/) for bundled dependencies. The benchmark and wrapper were developed with AI assistance; their limitations and test evidence are recorded with the results. This branch is an independent experiment and has not been submitted or accepted upstream.
+
+## 3 November source hardening and timing
+
+The current source defaults to serial verification, contains response allocation failures across the C ABI, cooperatively cancels model loading, and rejects reserved control-token spellings and NUL inside chat content. Literal discussion of those spellings is currently rejected. The raw tokenization API has explicit special-token flags. Native timing separates synchronization and after-sync duration; decode duration overlaps these phases.
+
+These source changes do not modify the earlier published research binary or its tag. They do not establish cross-library symbol isolation, universal exactness, a phone speedup or distributed memory. The NodeLift 8B pilot reproduced output divergence in explicit batch mode, including an upstream control. See the [pilot, raw evidence and limits](https://github.com/sev7enITA/NodeLift/tree/main/research/async-pipeline-2026-11-03).

@@ -15,7 +15,7 @@ from nodelift.native import Native, library_path
 parser=argparse.ArgumentParser()
 parser.add_argument('--model',default=str(ROOT/'.models/qwen2.5-0.5b-instruct-q4_k_m.gguf'))
 parser.add_argument('--gpu-layers',type=int,default=999)
-parser.add_argument('--strict',action='store_true',help='Verify tokens one at a time using the experimental serial path')
+parser.add_argument('--strict',action='store_true',help='Verify tokens one at a time using the serial correctness path')
 parser.add_argument('--output',default=str(ROOT/'artifacts/native-correctness.json'))
 args=parser.parse_args()
 checks=[]

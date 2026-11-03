@@ -37,8 +37,12 @@ struct Engine {
     llama_token next = -1;
     std::string fingerprint;
     int nctx = 0;
+    double sync_ms = 0, decode_ms = 0;
+    uint64_t decode_calls = 0, decode_tokens = 0, sync_tokens = 0;
+    bool syncing = false;
 
     static bool abort(void * p) { return static_cast<Engine *>(p)->cancelled.load(); }
+    static bool load_progress(float, void * p) { return !abort(p); }
     void check() { require(!cancelled.load(), "cancelled"); }
     void valid(const tokens & ids) {
         for (auto id : ids) require(id >= 0 && id < llama_vocab_n_tokens(vocab), "token outside vocabulary");
@@ -79,7 +83,9 @@ struct Engine {
         require(nctx>=256 && nctx<=8192 && threads>=1 && threads<=16 && gpu>=0 && gpu<=999,"invalid model limits");
         std::call_once(backend_once,[]{llama_backend_init();});
         auto mp=llama_model_default_params();mp.n_gpu_layers=gpu;
+        mp.progress_callback=load_progress;mp.progress_callback_user_data=this;
         model.reset(llama_model_load_from_file(req.at("path").get<std::string>().c_str(),mp));
+        check();
         require(bool(model),"model could not be loaded");
         require(!llama_model_is_recurrent(model.get()) && !llama_model_is_hybrid(model.get()),"recurrent/hybrid models require checkpoint rollback and are not qualified");
         require(!llama_model_has_encoder(model.get()),"encoder-decoder models are not qualified");
@@ -87,6 +93,7 @@ struct Engine {
         cp.n_threads=threads;cp.n_threads_batch=threads;cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
         cp.abort_callback=abort;cp.abort_callback_data=this;
         ctx.reset(llama_init_from_model(model.get(),cp));require(bool(ctx),"context allocation failed");
+        check();nctx=int(llama_n_ctx(ctx.get()));
         vocab=llama_model_get_vocab(model.get());fingerprint=vocab_hash();
         return {{"tokenizer_fingerprint",fingerprint},{"vocab_size",llama_vocab_n_tokens(vocab)},
                 {"n_ctx",llama_n_ctx(ctx.get())},{"gpu_layers_requested",gpu},{"runtime",llama_version()}};
@@ -100,7 +107,11 @@ struct Engine {
             batch.token[i]=input[i];batch.pos[i]=int(cached.size())+i;
             batch.n_seq_id[i]=1;batch.seq_id[i][0]=0;batch.logits[i]=all || i==batch.n_tokens-1;
         }
+        next=-1;
+        auto began=clock_type::now();
         int rc=llama_decode(ctx.get(),batch);llama_batch_free(batch);
+        decode_ms+=elapsed(began);++decode_calls;decode_tokens+=input.size();
+        if(syncing)sync_tokens+=input.size();
         if(rc!=0){reset();throw std::runtime_error(cancelled.load()?"cancelled":"llama_decode failed; cache reset");}
         cached.insert(cached.end(),input.begin(),input.end());
         std::vector<llama_token> choices;
@@ -109,6 +120,11 @@ struct Engine {
         return choices;
     }
     void sync(const tokens & prefix) {
+        struct SyncTimer {
+            Engine & e; clock_type::time_point started=clock_type::now();
+            explicit SyncTimer(Engine & value):e(value){e.syncing=true;}
+            ~SyncTimer(){e.sync_ms+=elapsed(started);e.syncing=false;}
+        } timer(*this);
         check(); valid(prefix);require(!prefix.empty() && prefix.size()<size_t(nctx),"prefix must be nonempty and leave context room");
         if(prefix==cached && next>=0)return;
         size_t keep=0;while(keep<prefix.size() && keep<cached.size() && prefix[keep]==cached[keep])++keep;
@@ -200,9 +216,31 @@ struct Engine {
         // Defer sync of the committed tail until the next block. Stale speculative
         // KV is never sampled: every entry point synchronizes its explicit prefix.
         return {{"tokens",output},{"accepted",accepted},{"proposed",proposal.size()},
-                {"eos",!output.empty() && llama_vocab_is_eog(vocab,output.back())}};
+                {"eos",!output.empty() && llama_vocab_is_eog(vocab,output.back())},{"verification_mode","experimental_batch"}};
+    }
+    tokens tokenize(const std::string & text,bool add_special,bool parse_special) {
+        int size=-llama_tokenize(vocab,text.data(),int(text.size()),nullptr,0,add_special,parse_special);
+        require(size>=0,"tokenization size failed");tokens ids(size);
+        int used=llama_tokenize(vocab,text.data(),int(text.size()),ids.data(),size,add_special,parse_special);
+        require(used>=0,"tokenization failed");ids.resize(used);return ids;
+    }
+    void untrusted_content(const std::string & text) {
+        require(text.find('\0')==std::string::npos,"chat content contains NUL");
+        // Fail closed instead of disabling the template's legitimate controls.
+        // Literal control spellings in user/assistant/system content are not yet
+        // supported by this wrapper; plain text and the trusted template remain.
+        require(tokenize(text,false,false)==tokenize(text,false,true),
+                "chat content contains a reserved control-token spelling");
+    }
+    json timing(double total) const {
+        return {{"schema_version",1},{"native_total_ms",total},{"native_sync_ms",sync_ms},
+                {"native_after_sync_ms",std::max(0.0,total-sync_ms)},
+                {"native_decode_ms",decode_ms},{"native_decode_calls",decode_calls},
+                {"native_decode_tokens",decode_tokens},{"native_sync_tokens",sync_tokens},
+                {"sync_includes_decode",true}};
     }
     json call(const json & req) {
+        sync_ms=decode_ms=0;decode_calls=decode_tokens=sync_tokens=0;syncing=false;
         const auto op=req.at("op").get<std::string>();if(op=="load")return load(req);
         require(ctx && vocab,"no model loaded");
         if(op=="reset"){reset();return {{"reset",true}};}
@@ -213,17 +251,22 @@ struct Engine {
                 std::vector<std::string> roles,contents;
                 if(req.contains("messages") && req["messages"].is_array()) {
                     require(!req["messages"].empty() && req["messages"].size()<=32,"invalid message count");
-                    for(const auto & m:req["messages"]){roles.push_back(m.at("role").get<std::string>());contents.push_back(m.at("content").get<std::string>());}
-                } else {roles.push_back("user");contents.push_back(text);}
+                    size_t bytes=0;
+                    for(const auto & m:req["messages"]){
+                        auto role=m.at("role").get<std::string>();auto content=m.at("content").get<std::string>();
+                        require(role=="system"||role=="user"||role=="assistant","unsupported chat role");
+                        bytes+=content.size();require(bytes<=131072,"chat messages too long");untrusted_content(content);
+                        roles.push_back(role);contents.push_back(content);
+                    }
+                } else {untrusted_content(text);roles.push_back("user");contents.push_back(text);}
                 std::vector<llama_chat_message> messages;
                 for(size_t i=0;i<roles.size();++i)messages.push_back({roles[i].c_str(),contents[i].c_str()});
                 int size=llama_chat_apply_template(tmpl,messages.data(),messages.size(),true,nullptr,0);require(size>0 && size<=262144,"unsupported or excessive chat template");
                 std::vector<char> out(size+1);int used=llama_chat_apply_template(tmpl,messages.data(),messages.size(),true,out.data(),int(out.size()));
                 require(used>=0 && used<int(out.size()),"chat template formatting failed");text.assign(out.data(),used);
             }
-            int size=-llama_tokenize(vocab,text.data(),int(text.size()),nullptr,0,true,true);
-            require(size>0 && size<nctx,"prompt exceeds context");tokens ids(size);
-            int used=llama_tokenize(vocab,text.data(),int(text.size()),ids.data(),size,true,true);require(used>=0,"tokenization failed");ids.resize(used);
+            auto ids=tokenize(text,req.value("add_special",true),req.value("chat",false)||req.value("parse_special",false));
+            require(!ids.empty(),"tokenization produced no tokens");require(ids.size()<size_t(nctx),"prompt exceeds context");
             return {{"tokens",ids},{"tokenizer_fingerprint",fingerprint}};
         }
         if(op=="text") {
@@ -235,12 +278,12 @@ struct Engine {
             return {{"text",text},{"bytes_hex",hex}};
         }
         auto prefix=req.at("prefix").get<tokens>();auto start=clock_type::now();
-        if(op=="prefill"){sync(prefix);return {{"ms",elapsed(start)}};}
-        if(op=="draft"){auto ids=draft(prefix,req.value("count",4));return {{"tokens",ids},{"ms",elapsed(start)},{"eos",!ids.empty()&&llama_vocab_is_eog(vocab,ids.back())},{"tokenizer_fingerprint",fingerprint}};}
+        if(op=="prefill"){sync(prefix);auto ms=elapsed(start);return {{"ms",ms},{"timing",timing(ms)}};}
+        if(op=="draft"){auto ids=draft(prefix,req.value("count",4));auto ms=elapsed(start);return {{"tokens",ids},{"ms",ms},{"timing",timing(ms)},{"eos",!ids.empty()&&llama_vocab_is_eog(vocab,ids.back())},{"tokenizer_fingerprint",fingerprint}};}
         if(op=="verify"){
             auto proposal=req.at("proposal").get<tokens>();int remaining=req.value("remaining",512);
-            auto value=req.value("strict",false)?verify_serial(prefix,proposal,remaining):verify(prefix,proposal,remaining);
-            value["ms"]=elapsed(start);return value;
+            auto value=req.value("strict",true)?verify_serial(prefix,proposal,remaining):verify(prefix,proposal,remaining);
+            auto ms=elapsed(start);value["ms"]=ms;value["timing"]=timing(ms);return value;
         }
         throw std::runtime_error("unknown native operation");
     }
@@ -261,16 +304,32 @@ extern "C" void * nl_create() {
     }catch(...){return nullptr;}
 }
 extern "C" void nl_cancel(void * p) {auto e=lookup(p);if(e)e->cancelled.store(true);}
+#ifdef NODELIFT_TEST_FAULTS
+static std::atomic<int> response_fault{0};
+extern "C" void nl_test_fail_next_response(int kind) { response_fault.store(kind); }
+#endif
 extern "C" char * nl_call(void * p,const char * input) {
-    json result;
+    // The outer boundary also contains allocations made while constructing an
+    // error, serializing it and copying its result. Null is an allocation error.
     try {
-        auto retained=lookup(p);require(retained && input,"invalid native handle");auto & e=*retained;std::lock_guard<std::mutex> lock(e.mutex);
-        e.cancelled.store(false);
-        require(!e.closing.load(),"native handle is closing");
-        try { result=e.call(json::parse(input)); }
-        catch (...) { if(e.ctx)e.reset(); throw; }
-    }catch(const std::exception & ex){result={{"error",ex.what()}};}catch(...){result={{"error","unknown native error"}};}
-    return strdup(result.dump(-1,' ',true,json::error_handler_t::replace).c_str());
+        json result;
+        try {
+            auto retained=lookup(p);require(retained && input,"invalid native handle");auto & e=*retained;std::lock_guard<std::mutex> lock(e.mutex);
+            e.cancelled.store(false);
+            require(!e.closing.load(),"native handle is closing");
+            bool loading=false;
+            try {auto request=json::parse(input);loading=request.value("op",std::string())=="load";result=e.call(request);}
+            catch (...) {
+                if(loading){e.ctx.reset();e.model.reset();e.vocab=nullptr;e.cached.clear();e.next=-1;}
+                else if(e.ctx)e.reset();
+                throw;
+            }
+        }catch(const std::exception & ex){result={{"error",ex.what()}};}catch(...){result={{"error","unknown native error"}};}
+#ifdef NODELIFT_TEST_FAULTS
+        int fault=response_fault.exchange(0);if(fault==1)throw std::bad_alloc();if(fault==2)return nullptr;
+#endif
+        return strdup(result.dump(-1,' ',true,json::error_handler_t::replace).c_str());
+    } catch (...) {return nullptr;}
 }
 extern "C" void nl_free_string(char * p) {free(p);}
 extern "C" void nl_destroy(void * p) {
